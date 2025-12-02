@@ -1,7 +1,31 @@
 import { GoogleGenAI } from "@google/genai";
 import { Transaction } from '../types';
 
-const apiKey = process.env.API_KEY || '';
+// Safely access environment variables in Vite/Vercel environment
+// This prevents "process is not defined" white screen error
+const getApiKey = () => {
+  try {
+    // @ts-ignore - Vite specific
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_KEY) {
+      // @ts-ignore
+      return import.meta.env.VITE_API_KEY;
+    }
+  } catch (e) {
+    // Ignore error
+  }
+  
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+      return process.env.API_KEY;
+    }
+  } catch (e) {
+    // Ignore error
+  }
+  
+  return '';
+};
+
+const apiKey = getApiKey();
 const ai = new GoogleGenAI({ apiKey });
 
 export const generateInventoryReport = async (transactions: Transaction[], query: string): Promise<string> => {

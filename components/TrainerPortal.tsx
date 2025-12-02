@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { Item, Trainer, Transaction, ItemStatus } from '../types';
-import { User, ArrowUpRight, ArrowLeft, Clock, CheckCircle, Plus, X, Save, Wrench, Lock, Settings, LogOut } from 'lucide-react';
+import { User, ArrowUpRight, ArrowLeft, Clock, CheckCircle, Plus, X, Save, Wrench, Lock, Settings, LogOut, AlertTriangle } from 'lucide-react';
 
 interface TrainerPortalProps {
   trainers: Trainer[];
@@ -42,6 +42,10 @@ export const TrainerPortal: React.FC<TrainerPortalProps> = ({
 
   // Settings State
   const [newPassword, setNewPassword] = useState('');
+
+  // Return Modal State
+  const [showReturnModal, setShowReturnModal] = useState(false);
+  const [transactionToReturn, setTransactionToReturn] = useState<Transaction | null>(null);
 
   // Derived Data
   const currentTrainer = trainers.find(t => t.id === currentTrainerId);
@@ -136,9 +140,16 @@ export const TrainerPortal: React.FC<TrainerPortalProps> = ({
       }
   };
 
-  const handleRequestReturn = (transactionId: string) => {
-      if(window.confirm("هل تريد إرسال طلب إرجاع للمستودع؟ لن يتم إخلاء طرفك حتى يوافق أمين المستودع.")) {
-          onRequestReturn(transactionId);
+  const initiateReturnRequest = (transaction: Transaction) => {
+      setTransactionToReturn(transaction);
+      setShowReturnModal(true);
+  };
+
+  const confirmReturnRequest = () => {
+      if (transactionToReturn) {
+          onRequestReturn(transactionToReturn.id);
+          setShowReturnModal(false);
+          setTransactionToReturn(null);
       }
   };
 
@@ -209,7 +220,7 @@ export const TrainerPortal: React.FC<TrainerPortalProps> = ({
 
   // --- RENDER: PORTAL INTERFACE ---
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6 animate-fade-in relative">
         {/* Header */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center flex-wrap gap-4">
             <div className="flex items-center gap-4">
@@ -426,7 +437,7 @@ export const TrainerPortal: React.FC<TrainerPortalProps> = ({
                                 
                                 {!t.returnRequested ? (
                                     <button 
-                                        onClick={() => handleRequestReturn(t.id)}
+                                        onClick={() => initiateReturnRequest(t)}
                                         className="bg-white border border-red-200 text-red-600 hover:bg-red-50 text-xs px-4 py-2 rounded-md font-bold transition-colors shadow-sm"
                                     >
                                         طلب إرجاع
@@ -442,6 +453,48 @@ export const TrainerPortal: React.FC<TrainerPortalProps> = ({
                 )}
             </div>
         )}
+
+        {/* Return Request Confirmation Modal */}
+        {showReturnModal && transactionToReturn && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
+                    <div className="bg-amber-50 p-6 text-center border-b border-amber-100">
+                        <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <AlertTriangle size={32} className="text-amber-600" />
+                        </div>
+                        <h3 className="text-xl font-bold text-amber-800 mb-2">تأكيد طلب الإرجاع</h3>
+                        <p className="text-slate-600 text-sm">
+                            هل أنت متأكد من رغبتك في إرجاع: <br/>
+                            <span className="font-bold text-slate-800">{transactionToReturn.itemName}</span>؟
+                        </p>
+                    </div>
+                    
+                    <div className="p-6">
+                        <p className="text-xs text-slate-400 mb-6 text-center">
+                            ملاحظة: لن يتم إخلاء طرفك من العهدة إلا بعد موافقة أمين المستودع على هذا الطلب.
+                        </p>
+
+                        <div className="flex gap-3">
+                            <button 
+                                type="button" 
+                                onClick={() => setShowReturnModal(false)} 
+                                className="flex-1 px-4 py-3 border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+                            >
+                                إلغاء
+                            </button>
+                            <button 
+                                type="button" 
+                                onClick={confirmReturnRequest} 
+                                className="flex-1 px-4 py-3 bg-amber-600 text-white rounded-lg font-bold hover:bg-amber-700 shadow-sm transition-colors"
+                            >
+                                نعم، إرسال الطلب
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
+
     </div>
   );
 };

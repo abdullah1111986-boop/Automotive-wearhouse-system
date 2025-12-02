@@ -10,165 +10,261 @@ import { TrainerPortal } from './components/TrainerPortal';
 import { AdminLogin } from './components/AdminLogin';
 import { Item, Trainer, Transaction, ItemStatus, PageView } from './types';
 import { INITIAL_ITEMS, INITIAL_TRAINERS } from './constants';
-import { Menu, Code } from 'lucide-react';
+import { Menu, Code, RefreshCw } from 'lucide-react';
+import { db } from './services/firebase';
+import { 
+  collection, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  doc, 
+  query, 
+  orderBy,
+  writeBatch,
+  getDocs
+} from 'firebase/firestore';
 
 const App: React.FC = () => {
   // State initialization
   const [currentPage, setCurrentPage] = useState<PageView>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
   
   // Auth State
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
 
-  // Data State (Simulating database)
-  const [items, setItems] = useState<Item[]>(() => {
-    const saved = localStorage.getItem('inventory_items');
-    return saved ? JSON.parse(saved) : INITIAL_ITEMS;
-  });
+  // Data State
+  const [items, setItems] = useState<Item[]>([]);
+  const [trainers, setTrainers] = useState<Trainer[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
 
-  const [trainers, setTrainers] = useState<Trainer[]>(() => {
-    const saved = localStorage.getItem('inventory_trainers');
-    // We prioritize saved data to allow persistence of changes (password updates, deletions)
-    // If no saved data exists, we load the initial hardcoded list.
-    if (saved) {
-        return JSON.parse(saved);
-    }
-    return INITIAL_TRAINERS;
-  });
-
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem('inventory_transactions');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  // Persist data
+  // --- FIREBASE SUBSCRIPTIONS ---
   useEffect(() => {
-    localStorage.setItem('inventory_items', JSON.stringify(items));
-    localStorage.setItem('inventory_transactions', JSON.stringify(transactions));
-    localStorage.setItem('inventory_trainers', JSON.stringify(trainers));
-  }, [items, transactions, trainers]);
+    const unsubItems = onSnapshot(collection(db, "items"), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item));
+      setItems(data);
+    });
 
-  // Handlers
+    const unsubTrainers = onSnapshot(collection(db, "trainers"), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trainer));
+      setTrainers(data);
+    });
+
+    // Order transactions by time (newest first logic can be handled in UI, or here)
+    // We get all to allow filtering in HistoryLog
+    const unsubTransactions = onSnapshot(collection(db, "transactions"), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
+      setTransactions(data);
+      setLoading(false);
+    });
+
+    return () => {
+      unsubItems();
+      unsubTrainers();
+      unsubTransactions();
+    };
+  }, []);
+
+  // --- DATA SEEDING (Run once if DB is empty) ---
+  useEffect(() => {
+    const seedDatabase = async () => {
+      if (loading) return; // Wait for initial load
+
+      // Check if collections are empty
+      if (items.length === 0 && trainers.length === 0) {
+        console.log("Seeding database...");
+        const batch = writeBatch(db);
+
+        // Seed Items
+        INITIAL_ITEMS.forEach(item => {
+          // Create a new doc ref for each item
+          const docRef = doc(collection(db, "items"));
+          batch.set(docRef, { ...item, id: docRef.id }); // Ensure ID matches
+        });
+
+        // Seed Trainers
+        INITIAL_TRAINERS.forEach(trainer => {
+          const docRef = doc(collection(db, "trainers"));
+          batch.set(docRef, { ...trainer, id: docRef.id });
+        });
+
+        try {
+          await batch.commit();
+          console.log("Database seeded successfully");
+        } catch (e) {
+          console.error("Error seeding database:", e);
+        }
+      }
+    };
+
+    if (!loading) {
+      seedDatabase();
+    }
+  }, [loading]); // Run when loading completes
+
+  // --- HANDLERS (Async with Firebase) ---
+
   const handleAddItem = (name: string, category: string): Item => {
-    const newItem: Item = {
-      id: crypto.randomUUID(),
+    // Optimistic return, actual save is async
+    const newItemTemp = {
+      id: "temp-" + Date.now(),
       name,
       category,
       status: ItemStatus.AVAILABLE
     };
-    setItems(prev => [...prev, newItem]);
-    return newItem;
-  };
-
-  const handleAddTrainer = (name: string) => {
-    const newTrainer: Trainer = {
-      id: crypto.randomUUID(),
-      name: name,
-      password: '1234' // Default password for new manually added trainers
-    };
-    setTrainers(prev => [...prev, newTrainer]);
-  };
-
-  const handleDeleteTrainer = (id: string) => {
-    // Check if trainer has items first
-    const hasItems = transactions.some(t => t.trainerId === id && t.isActive);
     
-    if (hasItems) {
-        // Auto-return all items for this trainer
-        setTransactions(prev => prev.map(t => 
-             (t.trainerId === id && t.isActive)
-             ? { ...t, isActive: false, returnTime: new Date().toISOString(), returnRequested: false }
-             : t
-        ));
+    addDoc(collection(db, "items"), {
+      name,
+      category,
+      status: ItemStatus.AVAILABLE
+    }).then(() => {
+        // Success
+    }).catch(err => alert("Error adding item: " + err.message));
+
+    return newItemTemp;
+  };
+
+  const handleAddTrainer = async (name: string) => {
+    try {
+        await addDoc(collection(db, "trainers"), {
+            name: name,
+            password: '1234'
+        });
+    } catch (e) {
+        alert("Error adding trainer");
+    }
+  };
+
+  const handleDeleteTrainer = async (id: string) => {
+    // Check active loans
+    const activeLoans = transactions.filter(t => t.trainerId === id && t.isActive);
+    
+    if (activeLoans.length > 0) {
+        // Return all items
+        const batch = writeBatch(db);
         
-        // Update items status back to available
-        const trainerTransactions = transactions.filter(t => t.trainerId === id && t.isActive);
-        const itemIdsToReturn = trainerTransactions.map(t => t.itemId);
+        activeLoans.forEach(t => {
+            const tRef = doc(db, "transactions", t.id);
+            batch.update(tRef, { 
+                isActive: false, 
+                returnTime: new Date().toISOString(), 
+                returnRequested: false 
+            });
+            
+            // Look up item and update status
+            const item = items.find(i => i.id === t.itemId || i.name === t.itemName);
+            if (item) {
+                 // Note: Ideally store itemId reliably. 
+                 // If ID match from FB is different from seeding logic, might need care.
+                 // But assuming consistent IDs:
+                 const iRef = doc(db, "items", t.itemId); 
+                 // If t.itemId matches document ID. 
+                 // Note: Seeding uses random doc IDs for new items, but initial ones?
+                 // Seeding logic above sets doc ID. So t.itemId SHOULD be doc ID.
+                 batch.update(iRef, { status: ItemStatus.AVAILABLE });
+            }
+        });
         
-        setItems(prev => prev.map(i => 
-            itemIdsToReturn.includes(i.id) ? { ...i, status: ItemStatus.AVAILABLE } : i
-        ));
+        await batch.commit();
     }
 
-    setTrainers(prev => prev.filter(t => t.id !== id));
+    // Delete trainer
+    await deleteDoc(doc(db, "trainers", id));
   };
 
-  const handleUpdateTrainerPassword = (id: string, newPassword: string) => {
-      setTrainers(prev => prev.map(t => 
-        t.id === id ? { ...t, password: newPassword } : t
-      ));
+  const handleUpdateTrainerPassword = async (id: string, newPassword: string) => {
+      await updateDoc(doc(db, "trainers", id), { password: newPassword });
   };
 
-  const handleCheckout = (itemId: string, trainerId: string) => {
+  const handleCheckout = async (itemId: string, trainerId: string) => {
     const item = items.find(i => i.id === itemId);
     const trainer = trainers.find(t => t.id === trainerId);
 
     if (!item || !trainer) return;
 
-    const newTransaction: Transaction = {
-      id: crypto.randomUUID(),
-      itemId: item.id,
-      itemName: item.name,
-      trainerId: trainer.id,
-      trainerName: trainer.name,
-      checkoutTime: new Date().toISOString(),
-      isActive: true,
-      returnRequested: false
-    };
+    try {
+        const batch = writeBatch(db);
+        
+        // 1. Create Transaction
+        const tRef = doc(collection(db, "transactions"));
+        batch.set(tRef, {
+            itemId: item.id,
+            itemName: item.name,
+            trainerId: trainer.id,
+            trainerName: trainer.name,
+            checkoutTime: new Date().toISOString(),
+            isActive: true,
+            returnRequested: false
+        });
 
-    // Update Transaction Log
-    setTransactions(prev => [...prev, newTransaction]);
+        // 2. Update Item Status
+        const iRef = doc(db, "items", itemId);
+        batch.update(iRef, { status: ItemStatus.CHECKED_OUT });
 
-    // Update Item Status
-    setItems(prev => prev.map(i => 
-      i.id === itemId ? { ...i, status: ItemStatus.CHECKED_OUT } : i
-    ));
-    
-    // Only redirect if done by admin (not from portal)
-    if (currentPage === 'checkout') {
-        alert(`تم تسجيل خروج "${item.name}" للمدرب ${trainer.name} بنجاح`);
-        setCurrentPage('dashboard');
+        await batch.commit();
+
+        if (currentPage === 'checkout') {
+            alert(`تم تسجيل خروج "${item.name}" للمدرب ${trainer.name} بنجاح`);
+            setCurrentPage('dashboard');
+        }
+    } catch (e) {
+        console.error(e);
+        alert("حدث خطأ أثناء تسجيل العملية");
     }
   };
 
-  const handleTrainerReturnRequest = (transactionId: string) => {
-      setTransactions(prev => prev.map(t => 
-        t.id === transactionId ? { ...t, returnRequested: true } : t
-      ));
+  const handleTrainerReturnRequest = async (transactionId: string) => {
+      await updateDoc(doc(db, "transactions", transactionId), { returnRequested: true });
       alert("تم إرسال طلب الإرجاع بنجاح. يرجى انتظار موافقة أمين المستودع.");
   };
 
-  const handleReturn = (transactionId: string) => {
+  const handleReturn = async (transactionId: string) => {
     const transaction = transactions.find(t => t.id === transactionId);
     if (!transaction) return;
 
-    // Update Transaction
-    setTransactions(prev => prev.map(t => 
-      t.id === transactionId 
-        ? { ...t, isActive: false, returnTime: new Date().toISOString(), returnRequested: false } 
-        : t
-    ));
+    try {
+        const batch = writeBatch(db);
 
-    // Update Item Status
-    setItems(prev => prev.map(i => 
-      i.id === transaction.itemId ? { ...i, status: ItemStatus.AVAILABLE } : i
-    ));
+        // 1. Update Transaction
+        const tRef = doc(db, "transactions", transactionId);
+        batch.update(tRef, { 
+            isActive: false, 
+            returnTime: new Date().toISOString(), 
+            returnRequested: false 
+        });
 
-    alert(`تم تأكيد استلام "${transaction.itemName}" وإعادتها للمستودع.`);
+        // 2. Update Item Status
+        // Ensure transaction.itemId is valid doc ID
+        const iRef = doc(db, "items", transaction.itemId);
+        batch.update(iRef, { status: ItemStatus.AVAILABLE });
+
+        await batch.commit();
+
+        alert(`تم تأكيد استلام "${transaction.itemName}" وإعادتها للمستودع.`);
+    } catch (e) {
+        console.error(e);
+        alert("حدث خطأ أثناء الإرجاع");
+    }
   };
 
   const handlePageChange = (page: PageView) => {
       setCurrentPage(page);
   };
 
+  if (loading) {
+      return (
+          <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-600 gap-4">
+              <RefreshCw className="animate-spin text-blue-600" size={40} />
+              <p>جاري الاتصال بقاعدة البيانات...</p>
+          </div>
+      );
+  }
+
   // Render Page Content
   const renderContent = () => {
-    // Define pages that are OPEN to everyone (no admin login required)
-    // Only 'trainer-portal' is public now. 'history' requires admin login.
     const publicPages: PageView[] = ['trainer-portal'];
 
-    // If page is NOT public and admin is NOT unlocked, show Admin Login
-    // This protects: dashboard, checkout, return, inventory, trainer-view, history
     if (!publicPages.includes(currentPage) && !isAdminUnlocked) {
         return <AdminLogin onLoginSuccess={() => setIsAdminUnlocked(true)} />;
     }
@@ -215,7 +311,6 @@ const App: React.FC = () => {
       case 'history':
         return <HistoryLog transactions={transactions} />;
       default:
-        // Default fallthrough to dashboard which is protected
         return <AdminLogin onLoginSuccess={() => setIsAdminUnlocked(true)} />;
     }
   };
