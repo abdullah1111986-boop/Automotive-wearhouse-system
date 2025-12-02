@@ -10,7 +10,7 @@ import { TrainerPortal } from './components/TrainerPortal';
 import { AdminLogin } from './components/AdminLogin';
 import { Item, Trainer, Transaction, ItemStatus, PageView } from './types';
 import { INITIAL_ITEMS, INITIAL_TRAINERS } from './constants';
-import { Menu, Code, RefreshCw } from 'lucide-react';
+import { Menu, Code, RefreshCw, AlertTriangle } from 'lucide-react';
 import { db } from './services/firebase';
 import { 
   collection, 
@@ -19,10 +19,7 @@ import {
   updateDoc, 
   deleteDoc, 
   doc, 
-  query, 
-  orderBy,
-  writeBatch,
-  getDocs
+  writeBatch
 } from 'firebase/firestore';
 
 const App: React.FC = () => {
@@ -30,6 +27,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<PageView>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState(false);
   
   // Auth State
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
@@ -41,55 +39,65 @@ const App: React.FC = () => {
 
   // --- FIREBASE SUBSCRIPTIONS ---
   useEffect(() => {
-    const unsubItems = onSnapshot(collection(db, "items"), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item));
-      setItems(data);
-    });
-
-    const unsubTrainers = onSnapshot(collection(db, "trainers"), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trainer));
-      setTrainers(data);
-    });
-
-    // Order transactions by time (newest first logic can be handled in UI, or here)
-    // We get all to allow filtering in HistoryLog
-    const unsubTransactions = onSnapshot(collection(db, "transactions"), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
-      setTransactions(data);
+    if (!db) {
+      console.error("Firestore database is not initialized.");
+      setDbError(true);
       setLoading(false);
-    });
+      return;
+    }
 
-    return () => {
-      unsubItems();
-      unsubTrainers();
-      unsubTransactions();
-    };
+    try {
+      const unsubItems = onSnapshot(collection(db, "items"), (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item));
+        setItems(data);
+      });
+
+      const unsubTrainers = onSnapshot(collection(db, "trainers"), (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trainer));
+        setTrainers(data);
+      });
+
+      const unsubTransactions = onSnapshot(collection(db, "transactions"), (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
+        setTransactions(data);
+        setLoading(false);
+      });
+
+      return () => {
+        unsubItems();
+        unsubTrainers();
+        unsubTransactions();
+      };
+    } catch (err) {
+      console.error("Error setting up Firebase listeners:", err);
+      setDbError(true);
+      setLoading(false);
+    }
   }, []);
 
   // --- DATA SEEDING (Run once if DB is empty) ---
   useEffect(() => {
     const seedDatabase = async () => {
-      if (loading) return; // Wait for initial load
+      if (loading || !db || dbError) return; 
 
       // Check if collections are empty
       if (items.length === 0 && trainers.length === 0) {
         console.log("Seeding database...");
-        const batch = writeBatch(db);
-
-        // Seed Items
-        INITIAL_ITEMS.forEach(item => {
-          // Create a new doc ref for each item
-          const docRef = doc(collection(db, "items"));
-          batch.set(docRef, { ...item, id: docRef.id }); // Ensure ID matches
-        });
-
-        // Seed Trainers
-        INITIAL_TRAINERS.forEach(trainer => {
-          const docRef = doc(collection(db, "trainers"));
-          batch.set(docRef, { ...trainer, id: docRef.id });
-        });
-
         try {
+          const batch = writeBatch(db);
+
+          // Seed Items
+          INITIAL_ITEMS.forEach(item => {
+            const docRef = doc(collection(db, "items"));
+            batch.set(docRef, { ...item, id: docRef.id });
+          });
+
+          // Seed Trainers
+          INITIAL_TRAINERS.forEach(trainer => {
+            const docRef = doc(collection(db, "trainers"));
+            batch.set(docRef, { ...trainer, id: docRef.id });
+          });
+
           await batch.commit();
           console.log("Database seeded successfully");
         } catch (e) {
@@ -101,12 +109,13 @@ const App: React.FC = () => {
     if (!loading) {
       seedDatabase();
     }
-  }, [loading]); // Run when loading completes
+  }, [loading, items.length, trainers.length, dbError]); 
 
   // --- HANDLERS (Async with Firebase) ---
 
   const handleAddItem = (name: string, category: string): Item => {
-    // Optimistic return, actual save is async
+    if (!db) return { id: 'temp', name, category, status: ItemStatus.AVAILABLE };
+
     const newItemTemp = {
       id: "temp-" + Date.now(),
       name,
@@ -126,6 +135,7 @@ const App: React.FC = () => {
   };
 
   const handleAddTrainer = async (name: string) => {
+    if (!db) return;
     try {
         await addDoc(collection(db, "trainers"), {
             name: name,
@@ -137,13 +147,14 @@ const App: React.FC = () => {
   };
 
   const handleDeleteTrainer = async (id: string) => {
+    if (!db) return;
+
     // Check active loans
     const activeLoans = transactions.filter(t => t.trainerId === id && t.isActive);
     
+    const batch = writeBatch(db);
+    
     if (activeLoans.length > 0) {
-        // Return all items
-        const batch = writeBatch(db);
-        
         activeLoans.forEach(t => {
             const tRef = doc(db, "transactions", t.id);
             batch.update(tRef, { 
@@ -152,32 +163,35 @@ const App: React.FC = () => {
                 returnRequested: false 
             });
             
-            // Look up item and update status
-            const item = items.find(i => i.id === t.itemId || i.name === t.itemName);
+            // Check if items list contains this item and update it
+            const item = items.find(i => i.id === t.itemId);
             if (item) {
-                 // Note: Ideally store itemId reliably. 
-                 // If ID match from FB is different from seeding logic, might need care.
-                 // But assuming consistent IDs:
                  const iRef = doc(db, "items", t.itemId); 
-                 // If t.itemId matches document ID. 
-                 // Note: Seeding uses random doc IDs for new items, but initial ones?
-                 // Seeding logic above sets doc ID. So t.itemId SHOULD be doc ID.
                  batch.update(iRef, { status: ItemStatus.AVAILABLE });
             }
         });
-        
-        await batch.commit();
     }
 
     // Delete trainer
-    await deleteDoc(doc(db, "trainers", id));
+    const trainerRef = doc(db, "trainers", id);
+    batch.delete(trainerRef);
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      console.error("Error deleting trainer:", error);
+      alert("حدث خطأ أثناء حذف المدرب");
+    }
   };
 
   const handleUpdateTrainerPassword = async (id: string, newPassword: string) => {
+      if (!db) return;
       await updateDoc(doc(db, "trainers", id), { password: newPassword });
   };
 
   const handleCheckout = async (itemId: string, trainerId: string) => {
+    if (!db) return;
+
     const item = items.find(i => i.id === itemId);
     const trainer = trainers.find(t => t.id === trainerId);
 
@@ -215,11 +229,14 @@ const App: React.FC = () => {
   };
 
   const handleTrainerReturnRequest = async (transactionId: string) => {
+      if (!db) return;
       await updateDoc(doc(db, "transactions", transactionId), { returnRequested: true });
       alert("تم إرسال طلب الإرجاع بنجاح. يرجى انتظار موافقة أمين المستودع.");
   };
 
   const handleReturn = async (transactionId: string) => {
+    if (!db) return;
+
     const transaction = transactions.find(t => t.id === transactionId);
     if (!transaction) return;
 
@@ -235,7 +252,6 @@ const App: React.FC = () => {
         });
 
         // 2. Update Item Status
-        // Ensure transaction.itemId is valid doc ID
         const iRef = doc(db, "items", transaction.itemId);
         batch.update(iRef, { status: ItemStatus.AVAILABLE });
 
@@ -251,6 +267,28 @@ const App: React.FC = () => {
   const handlePageChange = (page: PageView) => {
       setCurrentPage(page);
   };
+
+  // --- RENDER STATES ---
+
+  if (dbError) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-800 p-6 text-center">
+        <div className="bg-red-50 p-6 rounded-full mb-4">
+          <AlertTriangle className="text-red-500" size={48} />
+        </div>
+        <h1 className="text-2xl font-bold mb-2">تعذر الاتصال بقاعدة البيانات</h1>
+        <p className="text-slate-600 max-w-md">
+          يرجى التحقق من اتصال الإنترنت، أو إعدادات جدار الحماية. إذا استمرت المشكلة، يرجى التواصل مع الدعم الفني.
+        </p>
+        <button 
+          onClick={() => window.location.reload()}
+          className="mt-6 bg-slate-800 text-white px-6 py-2 rounded-lg hover:bg-slate-900 transition-colors"
+        >
+          إعادة المحاولة
+        </button>
+      </div>
+    );
+  }
 
   if (loading) {
       return (

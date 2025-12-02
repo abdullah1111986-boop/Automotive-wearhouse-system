@@ -2,7 +2,6 @@ import { GoogleGenAI } from "@google/genai";
 import { Transaction } from '../types';
 
 // Safely access environment variables in Vite/Vercel environment
-// This prevents "process is not defined" white screen error
 const getApiKey = () => {
   try {
     // @ts-ignore - Vite specific
@@ -25,12 +24,11 @@ const getApiKey = () => {
   return '';
 };
 
-const apiKey = getApiKey();
-const ai = new GoogleGenAI({ apiKey });
-
 export const generateInventoryReport = async (transactions: Transaction[], query: string): Promise<string> => {
+  const apiKey = getApiKey();
+  
   if (!apiKey) {
-    return "عذراً، مفتاح API غير متوفر.";
+    return "عذراً، مفتاح API غير متوفر. يرجى إضافته في إعدادات Vercel.";
   }
 
   // Filter for relevant data to send to LLM to save tokens
@@ -55,6 +53,9 @@ export const generateInventoryReport = async (transactions: Transaction[], query
   `;
 
   try {
+    // Lazy initialization: create instance only when needed
+    const ai = new GoogleGenAI({ apiKey });
+    
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: [
@@ -62,7 +63,7 @@ export const generateInventoryReport = async (transactions: Transaction[], query
         { text: query }
       ],
       config: {
-        thinkingConfig: { thinkingBudget: 0 } // Disable thinking for faster simple responses
+        thinkingConfig: { thinkingBudget: 0 }
       }
     });
 
