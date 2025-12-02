@@ -7,7 +7,7 @@ interface CheckoutFormProps {
   trainers: Trainer[];
   transactions: Transaction[];
   onCheckout: (itemId: string, trainerId: string) => void;
-  onAddItem: (name: string, category: string) => Item;
+  onAddItem: (name: string, category: string) => Promise<Item>;
 }
 
 export const CheckoutForm: React.FC<CheckoutFormProps> = ({ items, trainers, transactions, onCheckout, onAddItem }) => {
@@ -19,6 +19,7 @@ export const CheckoutForm: React.FC<CheckoutFormProps> = ({ items, trainers, tra
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [newItemCategory, setNewItemCategory] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const availableItems = items.filter(
     i => i.status === ItemStatus.AVAILABLE && 
@@ -39,19 +40,27 @@ export const CheckoutForm: React.FC<CheckoutFormProps> = ({ items, trainers, tra
     }
   };
 
-  const handleAddNewItem = () => {
+  const handleAddNewItem = async () => {
     if (!newItemName.trim()) return;
+    setIsSubmitting(true);
     
-    const category = newItemCategory.trim() || 'عام';
-    const addedItem = onAddItem(newItemName, category);
-    
-    // Reset add form
-    setIsAddingNew(false);
-    setNewItemName('');
-    setNewItemCategory('');
-    
-    // Select the newly added item automatically
-    setSelectedItem(addedItem.id);
+    try {
+        const category = newItemCategory.trim() || 'عام';
+        const addedItem = await onAddItem(newItemName, category);
+        
+        // Reset add form
+        setIsAddingNew(false);
+        setNewItemName('');
+        setNewItemCategory('');
+        
+        // Select the newly added item automatically
+        setSelectedItem(addedItem.id);
+    } catch (e) {
+        console.error(e);
+        alert('حدث خطأ أثناء إضافة المعدة');
+    } finally {
+        setIsSubmitting(false);
+    }
   };
 
   return (
@@ -120,11 +129,11 @@ export const CheckoutForm: React.FC<CheckoutFormProps> = ({ items, trainers, tra
                   <button 
                     type="button"
                     onClick={handleAddNewItem}
-                    disabled={!newItemName}
+                    disabled={!newItemName || isSubmitting}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-4 rounded text-sm font-medium flex items-center gap-1 disabled:opacity-50"
                   >
                     <Save size={14} />
-                    حفظ
+                    {isSubmitting ? 'جاري...' : 'حفظ'}
                   </button>
                 </div>
               </div>

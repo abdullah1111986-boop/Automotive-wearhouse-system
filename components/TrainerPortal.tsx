@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Item, Trainer, Transaction, ItemStatus } from '../types';
 import { User, ArrowUpRight, ArrowLeft, Clock, CheckCircle, Plus, X, Save, Wrench, Lock, Settings, LogOut, AlertTriangle } from 'lucide-react';
@@ -9,7 +8,7 @@ interface TrainerPortalProps {
   transactions: Transaction[];
   onCheckout: (itemId: string, trainerId: string) => void;
   onRequestReturn: (transactionId: string) => void;
-  onAddItem: (name: string, category: string) => Item;
+  onAddItem: (name: string, category: string) => Promise<Item>;
   onUpdatePassword: (id: string, newPass: string) => void;
 }
 
@@ -39,6 +38,7 @@ export const TrainerPortal: React.FC<TrainerPortalProps> = ({
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [newItemName, setNewItemName] = useState('');
   const [newItemCategory, setNewItemCategory] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Settings State
   const [newPassword, setNewPassword] = useState('');
@@ -108,19 +108,27 @@ export const TrainerPortal: React.FC<TrainerPortalProps> = ({
       }
   };
 
-  const handleAddNewItem = () => {
+  const handleAddNewItem = async () => {
     if (!newItemName.trim()) return;
+    setIsSubmitting(true);
     
-    const category = newItemCategory.trim() || 'عام';
-    const addedItem = onAddItem(newItemName, category);
-    
-    // Reset add form
-    setIsAddingNew(false);
-    setNewItemName('');
-    setNewItemCategory('');
-    
-    // Select the newly added item automatically
-    setSelectedItem(addedItem.id);
+    try {
+        const category = newItemCategory.trim() || 'عام';
+        const addedItem = await onAddItem(newItemName, category);
+        
+        // Reset add form
+        setIsAddingNew(false);
+        setNewItemName('');
+        setNewItemCategory('');
+        
+        // Select the newly added item automatically
+        setSelectedItem(addedItem.id);
+    } catch (e) {
+        console.error(e);
+        alert('حدث خطأ');
+    } finally {
+        setIsSubmitting(false);
+    }
   };
 
   const handleSelfCheckout = (e: React.MouseEvent) => {
@@ -323,11 +331,11 @@ export const TrainerPortal: React.FC<TrainerPortalProps> = ({
                                 <button 
                                     type="button"
                                     onClick={handleAddNewItem}
-                                    disabled={!newItemName}
+                                    disabled={!newItemName || isSubmitting}
                                     className="bg-amber-600 hover:bg-amber-700 text-white px-4 rounded text-sm font-medium flex items-center gap-1 disabled:opacity-50"
                                 >
                                     <Save size={14} />
-                                    حفظ وتحديد
+                                    {isSubmitting ? 'جاري...' : 'حفظ وتحديد'}
                                 </button>
                             </div>
                         </div>

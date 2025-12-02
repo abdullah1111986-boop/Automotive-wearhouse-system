@@ -1,14 +1,14 @@
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAtD67pZfgRLEOyTyDDRvxERDl4I67TTWM",
-  authDomain: "sijil-trainee.firebaseapp.com",
-  projectId: "sijil-trainee",
-  storageBucket: "sijil-trainee.firebasestorage.app",
-  messagingSenderId: "725607426652",
-  appId: "1:725607426652:web:9dcb6f3e57abbd39cd5499",
-  measurementId: "G-1NF01RV093"
+  apiKey: "AIzaSyCLafsqzjTdAV7lFKcwl_6_CiUzVekadvw",
+  authDomain: "automotive-wearhouse.firebaseapp.com",
+  projectId: "automotive-wearhouse",
+  storageBucket: "automotive-wearhouse.firebasestorage.app",
+  messagingSenderId: "795513430004",
+  appId: "1:795513430004:web:4d61a3a4e31e5544a563a1",
+  measurementId: "G-06FX41HT20"
 };
 
 let db = null;
@@ -16,9 +16,9 @@ let db = null;
 try {
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
-  console.log("Firebase initialized successfully");
+  console.log("Firebase connected successfully to project: automotive-wearhouse");
 } catch (error) {
-  console.error("Error initializing Firebase:", error);
+  console.error("Firebase initialization error:", error);
 }
 
 export { db };

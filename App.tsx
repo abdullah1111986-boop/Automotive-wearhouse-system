@@ -10,24 +10,14 @@ import { TrainerPortal } from './components/TrainerPortal';
 import { AdminLogin } from './components/AdminLogin';
 import { Item, Trainer, Transaction, ItemStatus, PageView } from './types';
 import { INITIAL_ITEMS, INITIAL_TRAINERS } from './constants';
-import { Menu, Code, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Menu, Code, Download, WifiOff } from 'lucide-react';
 import { db } from './services/firebase';
-import { 
-  collection, 
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  doc, 
-  writeBatch
-} from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, writeBatch } from 'firebase/firestore';
 
 const App: React.FC = () => {
   // State initialization
   const [currentPage, setCurrentPage] = useState<PageView>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [dbError, setDbError] = useState(false);
   
   // Auth State
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
@@ -36,271 +26,254 @@ const App: React.FC = () => {
   const [items, setItems] = useState<Item[]>([]);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isDbConnected, setIsDbConnected] = useState(true);
 
-  // --- FIREBASE SUBSCRIPTIONS ---
+  // --- FIRESTORE SUBSCRIPTIONS ---
   useEffect(() => {
     if (!db) {
-      console.error("Firestore database is not initialized.");
-      setDbError(true);
-      setLoading(false);
-      return;
+        setIsDbConnected(false);
+        return;
     }
 
-    try {
-      const unsubItems = onSnapshot(collection(db, "items"), (snapshot) => {
+    // 1. Items Subscription
+    const unsubItems = onSnapshot(collection(db, 'items'), (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Item));
         setItems(data);
-      });
+        
+        // Seeding Initial Items if empty
+        if (data.length === 0) {
+            seedItems();
+        }
+    }, (error) => {
+        console.error("Error fetching items:", error);
+        setIsDbConnected(false);
+    });
 
-      const unsubTrainers = onSnapshot(collection(db, "trainers"), (snapshot) => {
+    // 2. Trainers Subscription
+    const unsubTrainers = onSnapshot(collection(db, 'trainers'), (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trainer));
         setTrainers(data);
-      });
 
-      const unsubTransactions = onSnapshot(collection(db, "transactions"), (snapshot) => {
+        // Seeding Initial Trainers if empty
+        if (data.length === 0) {
+            seedTrainers();
+        }
+    });
+
+    // 3. Transactions Subscription
+    const unsubTransactions = onSnapshot(collection(db, 'transactions'), (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
         setTransactions(data);
-        setLoading(false);
-      });
+    });
 
-      return () => {
+    return () => {
         unsubItems();
         unsubTrainers();
         unsubTransactions();
-      };
-    } catch (err) {
-      console.error("Error setting up Firebase listeners:", err);
-      setDbError(true);
-      setLoading(false);
-    }
+    };
   }, []);
 
-  // --- DATA SEEDING (Run once if DB is empty) ---
-  useEffect(() => {
-    const seedDatabase = async () => {
-      if (loading || !db || dbError) return; 
-
-      // Check if collections are empty
-      if (items.length === 0 && trainers.length === 0) {
-        console.log("Seeding database...");
-        try {
-          const batch = writeBatch(db);
-
-          // Seed Items
-          INITIAL_ITEMS.forEach(item => {
-            const docRef = doc(collection(db, "items"));
-            batch.set(docRef, { ...item, id: docRef.id });
+  // --- SEEDING FUNCTIONS ---
+  const seedItems = async () => {
+      if (!db) return;
+      const batch = writeBatch(db);
+      INITIAL_ITEMS.forEach(item => {
+          // Create a new ref for each item (letting Firestore generate ID, or use predefined if needed)
+          const docRef = doc(collection(db, 'items'));
+          // We remove the hardcoded ID to let Firestore generate one, or we can use it.
+          // Let's use Firestore IDs for cleaner DB, but map properties
+          batch.set(docRef, { 
+              name: item.name, 
+              category: item.category, 
+              status: item.status 
           });
+      });
+      await batch.commit();
+      console.log("Items seeded");
+  };
 
-          // Seed Trainers
-          INITIAL_TRAINERS.forEach(trainer => {
-            const docRef = doc(collection(db, "trainers"));
-            batch.set(docRef, { ...trainer, id: docRef.id });
+  const seedTrainers = async () => {
+      if (!db) return;
+      const batch = writeBatch(db);
+      INITIAL_TRAINERS.forEach(trainer => {
+          const docRef = doc(collection(db, 'trainers'));
+          batch.set(docRef, {
+              name: trainer.name,
+              password: trainer.password
           });
+      });
+      await batch.commit();
+      console.log("Trainers seeded");
+  };
 
-          await batch.commit();
-          console.log("Database seeded successfully");
-        } catch (e) {
-          console.error("Error seeding database:", e);
-        }
-      }
-    };
+  // --- HANDLERS ---
 
-    if (!loading) {
-      seedDatabase();
-    }
-  }, [loading, items.length, trainers.length, dbError]); 
-
-  // --- HANDLERS (Async with Firebase) ---
-
-  const handleAddItem = (name: string, category: string): Item => {
-    if (!db) return { id: 'temp', name, category, status: ItemStatus.AVAILABLE };
-
-    const newItemTemp = {
-      id: "temp-" + Date.now(),
+  const handleAddItem = async (name: string, category: string): Promise<Item> => {
+    if (!db) throw new Error("Database not connected");
+    
+    const newItem = {
       name,
       category,
       status: ItemStatus.AVAILABLE
     };
     
-    addDoc(collection(db, "items"), {
-      name,
-      category,
-      status: ItemStatus.AVAILABLE
-    }).then(() => {
-        // Success
-    }).catch(err => alert("Error adding item: " + err.message));
-
-    return newItemTemp;
+    const docRef = await addDoc(collection(db, 'items'), newItem);
+    return { id: docRef.id, ...newItem };
   };
 
   const handleAddTrainer = async (name: string) => {
     if (!db) return;
-    try {
-        await addDoc(collection(db, "trainers"), {
-            name: name,
-            password: '1234'
-        });
-    } catch (e) {
-        alert("Error adding trainer");
-    }
+    const newTrainer = {
+      name,
+      password: '1234'
+    };
+    await addDoc(collection(db, 'trainers'), newTrainer);
   };
 
   const handleDeleteTrainer = async (id: string) => {
     if (!db) return;
 
-    // Check active loans
+    // 1. Return all active loans for this trainer
     const activeLoans = transactions.filter(t => t.trainerId === id && t.isActive);
     
     const batch = writeBatch(db);
-    
+
     if (activeLoans.length > 0) {
-        activeLoans.forEach(t => {
-            const tRef = doc(db, "transactions", t.id);
-            batch.update(tRef, { 
-                isActive: false, 
-                returnTime: new Date().toISOString(), 
-                returnRequested: false 
-            });
-            
-            // Check if items list contains this item and update it
-            const item = items.find(i => i.id === t.itemId);
-            if (item) {
-                 const iRef = doc(db, "items", t.itemId); 
-                 batch.update(iRef, { status: ItemStatus.AVAILABLE });
-            }
-        });
+      // Return items to inventory
+      activeLoans.forEach(loan => {
+          // Find the item to update status
+          const item = items.find(i => i.id === loan.itemId);
+          if (item) { // Check if item exists in current state
+             // Note: In a real app we might want to query the item doc ref directly or store doc ID reference accurately
+             // Here we assume items state is in sync. 
+             // IMPORTANT: We need the DOCUMENT ID from Firestore, which comes from snapshot.
+             // Our state 'items' has 'id' which IS the document ID because of the mapping in onSnapshot.
+             const itemRef = doc(db, 'items', loan.itemId);
+             batch.update(itemRef, { status: ItemStatus.AVAILABLE });
+          }
+
+          // Close transaction
+          const txRef = doc(db, 'transactions', loan.id);
+          batch.update(txRef, { isActive: false, returnTime: new Date().toISOString() });
+      });
     }
 
-    // Delete trainer
-    const trainerRef = doc(db, "trainers", id);
+    // 2. Delete Trainer
+    const trainerRef = doc(db, 'trainers', id);
     batch.delete(trainerRef);
 
-    try {
-      await batch.commit();
-    } catch (error) {
-      console.error("Error deleting trainer:", error);
-      alert("حدث خطأ أثناء حذف المدرب");
-    }
+    await batch.commit();
   };
 
   const handleUpdateTrainerPassword = async (id: string, newPassword: string) => {
       if (!db) return;
-      await updateDoc(doc(db, "trainers", id), { password: newPassword });
+      const trainerRef = doc(db, 'trainers', id);
+      await updateDoc(trainerRef, { password: newPassword });
   };
 
   const handleCheckout = async (itemId: string, trainerId: string) => {
     if (!db) return;
-
     const item = items.find(i => i.id === itemId);
     const trainer = trainers.find(t => t.id === trainerId);
 
-    if (!item || !trainer) return;
+    if (item && trainer) {
+      const batch = writeBatch(db);
 
-    try {
-        const batch = writeBatch(db);
-        
-        // 1. Create Transaction
-        const tRef = doc(collection(db, "transactions"));
-        batch.set(tRef, {
-            itemId: item.id,
-            itemName: item.name,
-            trainerId: trainer.id,
-            trainerName: trainer.name,
-            checkoutTime: new Date().toISOString(),
-            isActive: true,
-            returnRequested: false
-        });
+      // Create Transaction
+      const newTransactionRef = doc(collection(db, 'transactions'));
+      const newTransaction = {
+        itemId: item.id,
+        itemName: item.name,
+        trainerId: trainer.id,
+        trainerName: trainer.name,
+        checkoutTime: new Date().toISOString(),
+        isActive: true,
+        returnRequested: false
+      };
+      batch.set(newTransactionRef, newTransaction);
 
-        // 2. Update Item Status
-        const iRef = doc(db, "items", itemId);
-        batch.update(iRef, { status: ItemStatus.CHECKED_OUT });
+      // Update Item Status
+      const itemRef = doc(db, 'items', itemId);
+      batch.update(itemRef, { status: ItemStatus.CHECKED_OUT });
 
-        await batch.commit();
+      await batch.commit();
 
-        if (currentPage === 'checkout') {
-            alert(`تم تسجيل خروج "${item.name}" للمدرب ${trainer.name} بنجاح`);
-            setCurrentPage('dashboard');
-        }
-    } catch (e) {
-        console.error(e);
-        alert("حدث خطأ أثناء تسجيل العملية");
+      if (currentPage === 'checkout') {
+          alert(`تم تسجيل خروج "${item.name}" للمدرب ${trainer.name} بنجاح`);
+          setCurrentPage('dashboard');
+      }
     }
   };
 
   const handleTrainerReturnRequest = async (transactionId: string) => {
       if (!db) return;
-      await updateDoc(doc(db, "transactions", transactionId), { returnRequested: true });
+      const txRef = doc(db, 'transactions', transactionId);
+      await updateDoc(txRef, { returnRequested: true });
       alert("تم إرسال طلب الإرجاع بنجاح. يرجى انتظار موافقة أمين المستودع.");
   };
 
   const handleReturn = async (transactionId: string) => {
     if (!db) return;
-
     const transaction = transactions.find(t => t.id === transactionId);
-    if (!transaction) return;
+    if (transaction) {
+      const batch = writeBatch(db);
 
-    try {
-        const batch = writeBatch(db);
+      // Close Transaction
+      const txRef = doc(db, 'transactions', transactionId);
+      batch.update(txRef, { 
+          isActive: false, 
+          returnTime: new Date().toISOString(), 
+          returnRequested: false 
+      });
 
-        // 1. Update Transaction
-        const tRef = doc(db, "transactions", transactionId);
-        batch.update(tRef, { 
-            isActive: false, 
-            returnTime: new Date().toISOString(), 
-            returnRequested: false 
-        });
-
-        // 2. Update Item Status
-        const iRef = doc(db, "items", transaction.itemId);
-        batch.update(iRef, { status: ItemStatus.AVAILABLE });
-
-        await batch.commit();
-
-        alert(`تم تأكيد استلام "${transaction.itemName}" وإعادتها للمستودع.`);
-    } catch (e) {
-        console.error(e);
-        alert("حدث خطأ أثناء الإرجاع");
+      // Update Item Status
+      const itemRef = doc(db, 'items', transaction.itemId);
+      batch.update(itemRef, { status: ItemStatus.AVAILABLE });
+      
+      await batch.commit();
+      
+      alert(`تم تأكيد استلام "${transaction.itemName}" وإعادتها للمستودع.`);
     }
+  };
+
+  const handleExportData = () => {
+    const data = {
+        items,
+        trainers,
+        transactions,
+        exportedAt: new Date().toISOString()
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `backup_inventory_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handlePageChange = (page: PageView) => {
       setCurrentPage(page);
   };
 
-  // --- RENDER STATES ---
-
-  if (dbError) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-800 p-6 text-center">
-        <div className="bg-red-50 p-6 rounded-full mb-4">
-          <AlertTriangle className="text-red-500" size={48} />
-        </div>
-        <h1 className="text-2xl font-bold mb-2">تعذر الاتصال بقاعدة البيانات</h1>
-        <p className="text-slate-600 max-w-md">
-          يرجى التحقق من اتصال الإنترنت، أو إعدادات جدار الحماية. إذا استمرت المشكلة، يرجى التواصل مع الدعم الفني.
-        </p>
-        <button 
-          onClick={() => window.location.reload()}
-          className="mt-6 bg-slate-800 text-white px-6 py-2 rounded-lg hover:bg-slate-900 transition-colors"
-        >
-          إعادة المحاولة
-        </button>
-      </div>
-    );
-  }
-
-  if (loading) {
-      return (
-          <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-600 gap-4">
-              <RefreshCw className="animate-spin text-blue-600" size={40} />
-              <p>جاري الاتصال بقاعدة البيانات...</p>
-          </div>
-      );
-  }
-
   // Render Page Content
   const renderContent = () => {
+    if (!isDbConnected) {
+        return (
+            <div className="flex flex-col items-center justify-center h-[60vh] text-center p-8 bg-red-50 rounded-xl border border-red-200">
+                <WifiOff size={48} className="text-red-500 mb-4" />
+                <h2 className="text-2xl font-bold text-red-800 mb-2">فشل الاتصال بقاعدة البيانات</h2>
+                <p className="text-red-600 max-w-md">
+                    يرجى التحقق من الاتصال بالإنترنت. إذا استمرت المشكلة، قد يكون هناك خطأ في إعدادات Firebase.
+                </p>
+                <p className="text-sm text-red-400 mt-4 font-mono bg-white px-3 py-1 rounded border border-red-100">
+                    Project ID: automotive-wearhouse
+                </p>
+            </div>
+        );
+    }
+
     const publicPages: PageView[] = ['trainer-portal'];
 
     if (!publicPages.includes(currentPage) && !isAdminUnlocked) {
@@ -309,7 +282,26 @@ const App: React.FC = () => {
 
     switch (currentPage) {
       case 'dashboard':
-        return <Dashboard transactions={transactions} items={items} />;
+        return (
+            <div className="space-y-6">
+                <Dashboard transactions={transactions} items={items} />
+                
+                {/* Backup Button for Admin */}
+                <div className="bg-slate-100 p-4 rounded-xl border border-slate-200 mt-8 flex justify-between items-center no-print">
+                    <div>
+                        <h3 className="font-bold text-slate-700">نسخة احتياطية</h3>
+                        <p className="text-xs text-slate-500">تحميل نسخة كاملة من البيانات (المدربين، المعدات، السجلات)</p>
+                    </div>
+                    <button 
+                        onClick={handleExportData}
+                        className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-700"
+                    >
+                        <Download size={16} />
+                        تصدير البيانات
+                    </button>
+                </div>
+            </div>
+        );
       case 'checkout':
         return (
           <CheckoutForm 
